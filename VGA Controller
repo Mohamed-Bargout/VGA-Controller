@@ -1,0 +1,248 @@
+library IEEE;
+use IEEE.STD_LOGIC_1164.ALL;
+use IEEE.NUMERIC_STD.ALL;
+
+
+entity SYNC is
+    Port ( CLK : in  STD_LOGIC;
+           LR : in std_logic; -- Left Right
+           UD : in std_logic; -- Up and Down
+           HE: in std_logic; -- Horizontal enable
+           VE: in std_logic; -- Vertical enable
+           BUTTON : in std_logic; -- Activate movement button
+           HSync : out  STD_LOGIC;
+           VSync : out  STD_LOGIC;
+           vgaRed : out  STD_LOGIC_VECTOR (3 downto 0);
+           vgaGreen : out  STD_LOGIC_VECTOR (3 downto 0);
+           vgaBlue : out  STD_LOGIC_VECTOR (3 downto 0));
+end SYNC;
+
+
+
+architecture Behavioral of SYNC is
+----------
+    component Image_Rom is
+        port (clk : in std_logic;
+	          en : in std_logic;
+	          addr : in std_logic_vector(14 downto 0);
+	          data : out std_logic_vector(2 downto 0));
+        end component Image_Rom;
+
+--    Signal clka: std_logic:='0';
+    Signal en: std_logic:='1';
+    Signal addr: std_logic_vector(14 downto 0):=(OTHERS => '0');
+    
+    Signal data: std_logic_vector(2 downto 0);
+    
+----------
+
+Signal clk_25: std_logic;
+Signal locked: std_logic;
+component clk_wiz_0
+port
+ (-- Clock in ports
+  -- Clock out ports
+  clk_25          : out    std_logic;
+  -- Status and control signals
+  reset             : in     std_logic;
+  locked            : out    std_logic;
+  CLK           : in     std_logic
+ );
+end component;
+
+constant HFP  : integer := 16 - 1;
+constant HS   : integer := 96;
+constant HBP  : integer := 48;
+constant HD   : integer := 640;
+constant HT   : integer := HD + HFP + HS + HBP;
+constant Hoff : integer := HFP + HS + HBP;
+
+constant VFP : integer := 10 - 1;
+constant VS  : integer := 2;
+constant VBP : integer := 33;
+constant VD  : integer := 480;
+constant VT : integer := VD + VFP + VS + VBP;
+constant Voff : integer := VFP + VS + VBP;
+
+constant trigger : std_logic := '0';
+
+signal Hpos : integer range 0 to HT:=0 ;
+signal Vpos : integer range 0 to VT:=0 ;
+
+signal clk25 : std_logic:='0';
+signal clk50 : std_logic:='0';
+
+-- image movement
+Signal incH: integer range -HD to HD:=0;
+Signal incV: integer range -VD to VD:=0;
+
+signal stop: boolean := true;
+signal pushed: boolean := false;
+
+Signal pix_count: integer range 0 to 19199 := 0;
+
+signal newFrame: boolean:= true;
+signal lineEnd : boolean := false;
+
+constant imageSize: integer := 19200;
+constant imageX: integer := 160;
+constant imageY: integer := 120;
+
+Signal wrap: integer range 0 to imageX;
+Signal flag: boolean := false;
+
+begin
+
+    ----------
+    
+    image : Image_Rom port map(clk_25, en, addr, data);
+    
+    ----------
+
+    your_instance_name : clk_wiz_0
+       port map ( 
+      -- Clock out ports  
+       clk_25 => clk_25,
+      -- Status and control signals                
+       reset => '0',
+       locked => locked,
+       -- Clock in ports
+       CLK => CLK
+     );
+    
+    clk_div : process(clk)
+    begin
+        if(clk'event and clk = '1')then
+            clk50 <= not clk50;
+        end if;
+        if(clk50'event and clk50 = '1')then
+            clk25 <= not clk25;
+        end if;
+    end process;
+    
+   
+    
+    main_process : process(clk_25)
+    begin
+        if(clk_25'event and clk_25 = '1')then
+            if(button = '0')then
+                pushed <= false;
+            end if;
+            if(button = '1' and not pushed)then
+                stop <= not stop;
+                pushed <= true;
+            end if;
+        -----------
+        -- Draw
+--            if(hoff + imageX + incH = HT)then
+--                incH <= 0;
+--            end if;
+            if(incH = HD)then
+                incH <= 0;
+            end if;
+            if(incV = VD)then
+                incV <= 0;
+            end if;
+            
+            if(Voff + imageY + incV = VT)then
+                incV <= 0;
+            end if;
+            if(incH < 0)then
+                incH <= HD - ImageX;
+            end if;
+            if(incV < 0)then
+                incV <= VD - ImageY;
+            end if;
+            
+            if(newFrame)then
+                pix_count <= 0;
+                newFrame <= false;
+            end if;
+            
+            if(imageX + incH >= HD and (Hpos >= Hoff and Hpos < hoff + imageX + incH - HD) and (Vpos >= Voff + incV and Vpos < Voff + imageY + incV))then
+                addr <= std_logic_vector( to_unsigned( pix_count + wrap + HD - incH, 15));
+                wrap <= wrap + 1;
+                    
+                vgaRed <= (others => data(2));
+                vgaGreen <= (others => data(1));
+                vgaBlue <= (others => data(0));
+                flag <= true;
+                
+            elsif((Hpos >= hoff + incH and hpos < hoff + imageX + incH) and (Vpos >= Voff + incV and Vpos < Voff + imageY + incV))then 
+                
+                addr <= std_logic_vector( to_unsigned( pix_count, 15));                  
+                pix_count <= pix_count + 1;
+                
+                if(hpos = HT and flag)then
+                    pix_count <= pix_count + wrap;
+                    lineEnd <= false;
+                    flag <= false;
+                    wrap <= 0;
+                end if;
+                
+                vgaRed <= (others => data(2));
+                vgaGreen <= (others => data(1));
+                vgaBlue <= (others => data(0));
+                
+            else
+                vgaRed <= (others => '0');
+                vgaGreen <= (others => '0');
+                vgaBlue <= (others => '1');
+            end if;
+            
+        
+        -----------
+            if(Hpos < HT)then
+                Hpos <= Hpos + 1;
+            else
+                Hpos <= 0;
+                lineEnd <= true;
+                if(Vpos < VT)then
+                    Vpos <= Vpos + 1;
+                    
+                else
+                    Vpos <= 0;
+                    newFrame <= true;
+                    if(not stop)then
+                        if(HE = '1')then
+                            if(LR = '0')then
+                                incH <= incH - 1;
+                            else
+                                incH<= incH + 1;
+                            end if;
+                        end if;
+                        if(VE = '1')then
+                            if(UD = '0')then
+                                incV <= incV - 1;
+                            else
+                                incV <= incV + 1;
+                            end if;
+                       end if;
+                    end if;
+                    --incV <= incV + 1; -- moves the image after every frame by 1 pixel i.e. 60 pixels a second
+                    --incH <= incH + 1;
+                end if;
+            end if;
+            
+            if(Hpos > (HFP) and Hpos < HFP + HS)then
+                Hsync <= trigger;
+            else
+                Hsync <= not trigger;
+            end if;
+            
+            if(Vpos > (VFP) and Vpos < VFP + VS)then
+                Vsync <= trigger;
+            else
+                Vsync <= not trigger;
+            end if;
+            if((Hpos > 0 and Hpos < (Hoff)) OR (Vpos > 0 and Vpos < (Voff)) )then
+                vgaRed <= (others => '0');
+                vgaGreen <= (others => '0');
+                vgaBlue <= (others => '0');
+            end if;
+            
+        end if;
+      
+    end process;
+
+end Behavioral;
